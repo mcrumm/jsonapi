@@ -112,6 +112,7 @@ defmodule JSONAPI.View do
   default style for presentation in names is to be underscored and not dashed.
   """
 
+  alias JSONAPI.Utils.String, as: JString
   alias Plug.Conn
 
   defmacro __using__(opts \\ []) do
@@ -183,17 +184,7 @@ defmodule JSONAPI.View do
 
       @spec attributes(map(), conn :: nil | Conn.t()) :: map()
       def attributes(data, conn) do
-        visible_fields = visible_fields(data, conn)
-
-        Enum.reduce(visible_fields, %{}, fn field, intermediate_map ->
-          value =
-            case function_exported?(__MODULE__, field, 2) do
-              true -> apply(__MODULE__, field, [data, conn])
-              false -> Map.get(data, field)
-            end
-
-          Map.put(intermediate_map, field, value)
-        end)
+        JSONAPI.View.__attributes__(__MODULE__, data, conn)
       end
 
       def links(_data, _conn), do: %{}
@@ -280,5 +271,46 @@ defmodule JSONAPI.View do
                      url_for: 2,
                      url_for_rel: 3
     end
+  end
+
+  @renderable [Date, DateTime, NaiveDateTime, Time]
+
+  @doc false
+  def __attributes__(view, data, conn) do
+    visible_fields = view.visible_fields(data, conn)
+
+    Enum.reduce(visible_fields, %{}, fn field, intermediate_map ->
+      value =
+        case function_exported?(view, field, 2) do
+          true -> apply(view, field, [data, conn])
+          false -> Map.get(data, field)
+        end
+
+      Map.put(intermediate_map, field, maybe_expand_fields(value))
+    end)
+  end
+
+  defp maybe_expand_fields(items) when is_list(items) do
+    Enum.map(items, &expand_fields/1)
+  end
+
+  defp maybe_expand_fields(%module{} = struct) when module not in @renderable do
+    struct
+    |> Map.from_struct()
+    |> Map.new(fn {key, value} -> {key, maybe_expand_fields(value)} end)
+  end
+
+  defp maybe_expand_fields(any), do: any
+
+  defp expand_fields(%_module{} = struct) do
+    struct
+    |> Map.from_struct()
+    |> JString.expand_fields(transformation())
+  end
+
+  defp expand_fields(any), do: any
+
+  defp transformation do
+    Function.capture(JString, JString.field_transformation(), 1)
   end
 end
